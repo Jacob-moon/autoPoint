@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>autoPoint - ZEP 일괄 지급기</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #f5f6fb; }
+      .wrap { max-width: 980px; margin: 24px auto; background: #fff; border-radius: 14px; padding: 20px; box-shadow: 0 8px 25px rgba(0,0,0,.08); }
+      h1 { margin-top: 0; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      label { display: block; font-size: 14px; margin-bottom: 6px; color: #333; }
+      input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #d8dbe8; border-radius: 8px; font-size: 14px; }
+      textarea { min-height: 120px; }
+      .full { grid-column: 1 / -1; }
+      .hint { color: #666; font-size: 12px; }
+      .btns { display: flex; gap: 8px; margin-top: 16px; }
+      button { border: none; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+      .primary { background: #2f6df6; color: #fff; }
+      .secondary { background: #eff2ff; color: #2f6df6; }
+      pre { background: #0f172a; color: #d2e2ff; padding: 12px; border-radius: 8px; min-height: 130px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>ZEP 포인트 일괄 지급기</h1>
+      <p class="hint">Google 로그인은 처음 실행 시 브라우저에서 직접 1회 진행하면 이후 재사용됩니다.</p>
+
+      <div class="grid">
+        <div class="full">
+          <label>지급 페이지 URL</label>
+          <input id="targetUrl" value="https://zep.us/spaces/app/file?appHashId=6r9dZj&fileName=setting.html" />
+        </div>
+
+        <div>
+          <label>지급 항목 템플릿</label>
+          <select id="policy"></select>
+        </div>
+
+        <div>
+          <label>기본 지급 포인트</label>
+          <input id="defaultPoint" type="number" value="400" />
+        </div>
+
+        <div class="full">
+          <label>대상자 목록 (한 줄에 1명: 이름,포인트) </label>
+          <textarea id="rows" placeholder="홍길동,400\n김코딩,1000"></textarea>
+          <div class="hint">포인트를 생략하면 기본 지급 포인트가 적용됩니다. 예: 홍길동</div>
+        </div>
+
+        <div class="full">
+          <label>채팅 메시지 템플릿 (선택)</label>
+          <input id="chatTemplate" value="{name}님에게 {point} 포인트가 지급되었습니다." />
+        </div>
+
+        <div>
+          <label>iframe URL 키워드</label>
+          <input id="frameUrlKeyword" value="setting.html" />
+        </div>
+
+        <div>
+          <label>요청 간격(ms)</label>
+          <input id="delayMs" type="number" value="800" />
+        </div>
+
+        <div>
+          <label>이름 입력 CSS (선택)</label>
+          <input id="nameSelector" placeholder="input[name='studentName']" />
+        </div>
+
+        <div>
+          <label>포인트 입력 CSS (선택)</label>
+          <input id="pointSelector" placeholder="input[name='point']" />
+        </div>
+
+        <div>
+          <label>지급 버튼 CSS (선택)</label>
+          <input id="submitSelector" placeholder="button#grant" />
+        </div>
+
+        <div>
+          <label>채팅 입력 CSS (선택)</label>
+          <input id="chatInputSelector" placeholder="textarea.chat-input" />
+        </div>
+      </div>
+
+      <div class="btns">
+        <button class="primary" id="runBtn">일괄 지급 실행</button>
+        <button class="secondary" id="resetBtn">리셋</button>
+      </div>
+
+      <h3>실행 로그</h3>
+      <pre id="log"></pre>
+    </div>
+
+    <script>
+      const policies = [
+        { name: '1) 주간 포인트 (매주 금요일)', point: 400 },
+        { name: '2) 우수 TIL 선정자', point: 1000 },
+        { name: '2-1) TIL 후보', point: 200 },
+        { name: '3) 학습 몰입 수강생', point: 400 },
+        { name: '3-1) 학습 몰입 조 선별', point: 200 },
+        { name: '비정기 이벤트', point: 300 }
+      ];
+
+      const policyEl = document.getElementById('policy');
+      policies.forEach((p) => {
+        const o = document.createElement('option');
+        o.value = p.point;
+        o.textContent = `${p.name} - ${p.point}p`;
+        policyEl.appendChild(o);
+      });
+
+      policyEl.addEventListener('change', () => {
+        document.getElementById('defaultPoint').value = policyEl.value;
+      });
+
+      document.getElementById('resetBtn').addEventListener('click', () => {
+        document.getElementById('rows').value = '';
+        document.getElementById('log').textContent = '입력값을 초기화했습니다.';
+      });
+
+      document.getElementById('runBtn').addEventListener('click', async () => {
+        const log = document.getElementById('log');
+        log.textContent = '실행 시작... 브라우저가 열리면 로그인/권한 팝업을 확인하세요.\n';
+
+        const defaultPoint = Number(document.getElementById('defaultPoint').value || '0');
+        const rows = document.getElementById('rows').value
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const [name, point] = line.split(',').map((v) => v.trim());
+            return { name, point: point ? Number(point) : defaultPoint };
+          });
+
+        try {
+          const response = await fetch('/api/grant', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetUrl: document.getElementById('targetUrl').value.trim(),
+              frameUrlKeyword: document.getElementById('frameUrlKeyword').value.trim(),
+              chatTemplate: document.getElementById('chatTemplate').value.trim(),
+              delayMs: Number(document.getElementById('delayMs').value || '800'),
+              selectors: {
+                name: document.getElementById('nameSelector').value.trim(),
+                point: document.getElementById('pointSelector').value.trim(),
+                submit: document.getElementById('submitSelector').value.trim(),
+                chatInput: document.getElementById('chatInputSelector').value.trim()
+              },
+              recipients: rows
+            })
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.message || '실패');
+          }
+
+          log.textContent += `완료: ${data.count}명 지급 성공\n`;
+          data.result.forEach((r) => {
+            log.textContent += `- ${r.name}: ${r.point}p (${r.status})\n`;
+          });
+        } catch (error) {
+          log.textContent += `오류: ${error.message}`;
+        }
+      });
+    </script>
+  </body>
+</html>
